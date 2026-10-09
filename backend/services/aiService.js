@@ -1,40 +1,48 @@
-const { GoogleGenerativeAI } = require('@google/generative-ai');
+const Groq = require('groq-sdk');
 const Ticket = require('../models/Ticket');
 
-// Initialize Gemini API
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || 'dummy_key');
+// Initialize Groq API
+const groq = new Groq({ apiKey: process.env.GROQ_API_KEY || 'dummy_key' });
 
-// Define tools (MCP concepts implemented as Gemini function calls)
+// Define tools (OpenAI format for Groq)
 const supportTools = [
   {
-    name: 'create_ticket',
-    description: 'Creates a new IT support ticket for the user if their issue requires human intervention or cannot be immediately resolved.',
-    parameters: {
-      type: 'OBJECT',
-      properties: {
-        title: { type: 'STRING', description: 'A short summary of the issue' },
-        description: { type: 'STRING', description: 'Detailed description of the problem' },
-        priority: { type: 'STRING', description: 'Priority level: low, medium, high, critical' },
-        category: { type: 'STRING', description: 'Category: Hardware, Software, Network, Access, General' }
-      },
-      required: ['title', 'description', 'priority', 'category']
+    type: 'function',
+    function: {
+      name: 'create_ticket',
+      description: 'Creates a new IT support ticket for the user if their issue requires human intervention or cannot be immediately resolved.',
+      parameters: {
+        type: 'object',
+        properties: {
+          title: { type: 'string', description: 'A short summary of the issue' },
+          description: { type: 'string', description: 'Detailed description of the problem' },
+          priority: { type: 'string', description: 'Priority level: low, medium, high, critical' },
+          category: { type: 'string', description: 'Category: Hardware, Software, Network, Access, General' }
+        },
+        required: ['title', 'description', 'priority', 'category']
+      }
     }
   },
   {
-    name: 'check_system_status',
-    description: 'Checks the current status of internal IT systems like VPN, Email, Intranet, or Cloud Services.',
-    parameters: {
-      type: 'OBJECT',
-      properties: {
-        systemName: { type: 'STRING', description: 'Name of the system to check (e.g. VPN, Email, Jira, AWS)' }
-      },
-      required: ['systemName']
+    type: 'function',
+    function: {
+      name: 'check_system_status',
+      description: 'Checks the current status of internal IT systems like VPN, Email, Intranet, or Cloud Services.',
+      parameters: {
+        type: 'object',
+        properties: {
+          systemName: { type: 'string', description: 'Name of the system to check (e.g. VPN, Email, Jira, AWS)' }
+        },
+        required: ['systemName']
+      }
     }
   }
 ];
 
 const handleToolCall = async (toolCall, userId) => {
-  const { name, args } = toolCall;
+  const name = toolCall.function.name;
+  const args = JSON.parse(toolCall.function.arguments);
+
   if (name === 'create_ticket') {
     const newTicket = new Ticket({
       userId,
@@ -57,32 +65,32 @@ const handleToolCall = async (toolCall, userId) => {
 
 const processUserMessage = async (message, userId) => {
   try {
-    // We check if API key is valid, otherwise mock it (for AWS free tier / easy testing)
-    if (!process.env.GEMINI_API_KEY || process.env.GEMINI_API_KEY === 'dummy_key') {
+    if (!process.env.GROQ_API_KEY || process.env.GROQ_API_KEY === 'dummy_key') {
       return { 
-        text: `(Mock Mode - Add GEMINI_API_KEY in backend/.env) I am the AI IT Support Agent. You said: "${message}". I can help you check system statuses or create support tickets.` 
+        text: `(Mock Mode - Add GROQ_API_KEY in backend/.env) I am the AI IT Support Agent. You said: "${message}". I can help you check system statuses or create support tickets.` 
       };
     }
 
-    const model = genAI.getGenerativeModel({
-      model: 'gemini-1.5-pro',
-      systemInstruction: "You are a helpful AI IT Support Agent. Your goal is to solve employee IT problems. If you cannot solve it immediately, use the create_ticket tool. If they ask if a system is down, use the check_system_status tool.",
-      tools: [{ functionDeclarations: supportTools }]
+    const response = await groq.chat.completions.create({
+      model: 'llama3-70b-8192',
+      messages: [
+        { role: 'system', content: "You are a helpful AI IT Support Agent. Your goal is to solve employee IT problems. If you cannot solve it immediately, use the create_ticket tool. If they ask if a system is down, use the check_system_status tool." },
+        { role: 'user', content: message }
+      ],
+      tools: supportTools,
+      tool_choice: 'auto'
     });
 
-    const result = await model.generateContent(message);
-    const response = result.response;
+    const responseMessage = response.choices[0].message;
 
-    const functionCalls = response.functionCalls();
-    if (functionCalls && functionCalls.length > 0) {
-      const call = functionCalls[0];
+    if (responseMessage.tool_calls && responseMessage.tool_calls.length > 0) {
+      const call = responseMessage.tool_calls[0];
       const toolResult = await handleToolCall(call, userId);
       
-      // Return the result of the tool to the user (in a real app we might feed it back to LLM)
       return { text: `I took an action on your behalf: ${toolResult}` };
     }
 
-    return { text: response.text() };
+    return { text: responseMessage.content };
 
   } catch (error) {
     console.error('AI Service Error:', error);
