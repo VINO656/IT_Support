@@ -57,7 +57,8 @@ const processUserMessage = async (message, userId) => {
         },
         { role: 'user', content: message }
       ],
-      temperature: 0.1
+      temperature: 0.1,
+      max_tokens: 150
     });
 
     const route = triageResponse.choices[0].message.content.trim().toUpperCase();
@@ -89,7 +90,8 @@ const processUserMessage = async (message, userId) => {
         { role: 'user', content: message }
       ],
       tools: selectedTools.length > 0 ? selectedTools : undefined,
-      tool_choice: 'auto'
+      tool_choice: 'auto',
+      max_tokens: 500
     });
 
     const responseMessage = specialistResponse.choices[0].message;
