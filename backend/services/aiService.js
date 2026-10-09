@@ -1,8 +1,8 @@
-const { GoogleGenAI } = require('@google/genai');
+const { GoogleGenerativeAI } = require('@google/generative-ai');
 const Ticket = require('../models/Ticket');
 
 // Initialize Gemini API
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || 'dummy_key' });
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || 'dummy_key');
 
 // Define tools (MCP concepts implemented as Gemini function calls)
 const supportTools = [
@@ -64,24 +64,25 @@ const processUserMessage = async (message, userId) => {
       };
     }
 
-    const response = await ai.models.generateContent({
-      model: 'gemini-2.5-pro',
-      contents: message,
-      config: {
-        systemInstruction: "You are a helpful AI IT Support Agent. Your goal is to solve employee IT problems. If you cannot solve it immediately, use the create_ticket tool. If they ask if a system is down, use the check_system_status tool.",
-        tools: [{ functionDeclarations: supportTools }]
-      }
+    const model = genAI.getGenerativeModel({
+      model: 'gemini-1.5-pro',
+      systemInstruction: "You are a helpful AI IT Support Agent. Your goal is to solve employee IT problems. If you cannot solve it immediately, use the create_ticket tool. If they ask if a system is down, use the check_system_status tool.",
+      tools: [{ functionDeclarations: supportTools }]
     });
 
-    if (response.functionCalls && response.functionCalls.length > 0) {
-      const call = response.functionCalls[0];
+    const result = await model.generateContent(message);
+    const response = result.response;
+
+    const functionCalls = response.functionCalls();
+    if (functionCalls && functionCalls.length > 0) {
+      const call = functionCalls[0];
       const toolResult = await handleToolCall(call, userId);
       
       // Return the result of the tool to the user (in a real app we might feed it back to LLM)
       return { text: `I took an action on your behalf: ${toolResult}` };
     }
 
-    return { text: response.text };
+    return { text: response.text() };
 
   } catch (error) {
     console.error('AI Service Error:', error);
