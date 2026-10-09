@@ -13,7 +13,7 @@ async function getMcpClient() {
   if (mcpClient) return mcpClient;
   const port = process.env.PORT || 5000;
   const transport = new SSEClientTransport(
-    new URL(`http://localhost:${port}/mcp/sse?token=super_secret_token`)
+    new URL(`http://127.0.0.1:${port}/mcp/sse?token=super_secret_token`)
   );
   
   mcpClient = new Client({ name: "it-support-client", version: "1.0.0" }, { capabilities: {} });
