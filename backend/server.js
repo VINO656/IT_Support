@@ -15,6 +15,11 @@ const PORT = process.env.PORT || 5000;
 // Security and middleware
 app.use(helmet());
 app.use(cors());
+
+// Secure MCP Endpoints (Must be before express.json so the SDK can read the raw stream)
+app.get('/mcp/sse', handleSse);
+app.post('/mcp/messages', handleMessages);
+
 app.use(express.json());
 
 // Database connection
@@ -29,10 +34,6 @@ connectRedis();
 app.use('/api/auth', authRoutes);
 app.use('/api/tickets', ticketRoutes);
 app.use('/api/chat', chatRoutes);
-
-// Secure MCP Endpoints
-app.get('/mcp/sse', handleSse);
-app.post('/mcp/messages', handleMessages);
 
 // Error handling
 app.use((err, req, res, next) => {
