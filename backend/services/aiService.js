@@ -114,7 +114,7 @@ const processUserMessage = async (message, userId) => {
 
   } catch (error) {
     console.error('AI Service Error:', error);
-    return { text: 'Sorry, the Agent Swarm is currently offline.' };
+    return { text: `Sorry, the Agent Swarm is currently offline. Error: ${error.message}` };
   }
 };
 
