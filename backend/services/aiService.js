@@ -72,7 +72,7 @@ const processUserMessage = async (message, userId) => {
     }
 
     const response = await groq.chat.completions.create({
-      model: 'llama-3.1-70b-versatile',
+      model: 'qwen/qwen3.8-27b',
       messages: [
         { role: 'system', content: "You are a helpful AI IT Support Agent. Your goal is to solve employee IT problems. If you cannot solve it immediately, use the create_ticket tool. If they ask if a system is down, use the check_system_status tool." },
         { role: 'user', content: message }
