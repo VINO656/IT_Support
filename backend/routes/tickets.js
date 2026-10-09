@@ -4,7 +4,17 @@ const authMiddleware = require('../middleware/authMiddleware');
 
 const router = express.Router();
 
-// Get all tickets for logged in user (or all if admin/support)
+// Admin endpoint to get ALL tickets
+router.get('/admin/all', authMiddleware, async (req, res) => {
+  try {
+    const tickets = await Ticket.find().sort({ createdAt: -1 }).populate('userId', 'name email');
+    res.json(tickets);
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
+// Get all tickets for logged in user
 router.get('/', authMiddleware, async (req, res) => {
   try {
     let tickets;

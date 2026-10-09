@@ -8,7 +8,7 @@ const { connectRedis } = require('./services/redisService');
 const authRoutes = require('./routes/auth');
 const ticketRoutes = require('./routes/tickets');
 const chatRoutes = require('./routes/chat');
-
+const { handleSse, handleMessages } = require('./mcp');
 const app = express();
 const PORT = process.env.PORT || 5000;
 
@@ -29,6 +29,10 @@ connectRedis();
 app.use('/api/auth', authRoutes);
 app.use('/api/tickets', ticketRoutes);
 app.use('/api/chat', chatRoutes);
+
+// Secure MCP Endpoints
+app.get('/mcp/sse', handleSse);
+app.post('/mcp/messages', handleMessages);
 
 // Error handling
 app.use((err, req, res, next) => {

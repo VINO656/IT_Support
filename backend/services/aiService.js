@@ -1,100 +1,120 @@
 const Groq = require('groq-sdk');
-const Ticket = require('../models/Ticket');
+const EventSource = require('eventsource');
+global.EventSource = EventSource;
 
-// Initialize Groq API
+const { Client } = require("@modelcontextprotocol/sdk/client/index.js");
+const { SSEClientTransport } = require("@modelcontextprotocol/sdk/client/sse.js");
+
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY || 'dummy_key' });
 
-// Define tools (OpenAI format for Groq)
-const supportTools = [
-  {
-    type: 'function',
-    function: {
-      name: 'create_ticket',
-      description: 'Creates a new IT support ticket for the user if their issue requires human intervention or cannot be immediately resolved.',
-      parameters: {
-        type: 'object',
-        properties: {
-          title: { type: 'string', description: 'A short summary of the issue' },
-          description: { type: 'string', description: 'Detailed description of the problem' },
-          priority: { type: 'string', description: 'Priority level: low, medium, high, critical' },
-          category: { type: 'string', description: 'Category: Hardware, Software, Network, Access, General' }
-        },
-        required: ['title', 'description', 'priority', 'category']
-      }
-    }
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'check_system_status',
-      description: 'Checks the current status of internal IT systems like VPN, Email, Intranet, or Cloud Services.',
-      parameters: {
-        type: 'object',
-        properties: {
-          systemName: { type: 'string', description: 'Name of the system to check (e.g. VPN, Email, Jira, AWS)' }
-        },
-        required: ['systemName']
-      }
-    }
-  }
-];
+let mcpClient = null;
 
-const handleToolCall = async (toolCall, userId) => {
-  const name = toolCall.function.name;
-  const args = JSON.parse(toolCall.function.arguments);
-
-  if (name === 'create_ticket') {
-    const newTicket = new Ticket({
-      userId,
-      title: args.title,
-      description: args.description,
-      priority: args.priority,
-      category: args.category,
-      aiResolved: false
-    });
-    await newTicket.save();
-    return `Ticket created successfully with ID: ${newTicket._id}. The IT team will review it shortly.`;
-  } else if (name === 'check_system_status') {
-    // Mock system status check
-    const statuses = ['Operational', 'Degraded Performance', 'Partial Outage'];
-    const randomStatus = statuses[Math.floor(Math.random() * statuses.length)];
-    return `The current status of ${args.systemName} is: ${randomStatus}.`;
-  }
-  return 'Unknown tool called.';
-};
+async function getMcpClient() {
+  if (mcpClient) return mcpClient;
+  const port = process.env.PORT || 5000;
+  const transport = new SSEClientTransport(
+    new URL(`http://localhost:${port}/mcp/sse?token=super_secret_token`)
+  );
+  
+  mcpClient = new Client({ name: "it-support-client", version: "1.0.0" }, { capabilities: {} });
+  await mcpClient.connect(transport);
+  return mcpClient;
+}
 
 const processUserMessage = async (message, userId) => {
   try {
     if (!process.env.GROQ_API_KEY || process.env.GROQ_API_KEY === 'dummy_key') {
-      return { 
-        text: `(Mock Mode - Add GROQ_API_KEY in backend/.env) I am the AI IT Support Agent. You said: "${message}". I can help you check system statuses or create support tickets.` 
-      };
+      return { text: `(Mock Mode) I am the AI IT Support Agent. You said: "${message}".` };
     }
 
-    const response = await groq.chat.completions.create({
-      model: 'qwen/qwen3.8-27b',
+    // 1. Connect to MCP Server
+    const client = await getMcpClient();
+    const toolsResult = await client.listTools();
+    
+    // Map tools by name so we can distribute them to different agents
+    const allTools = toolsResult.tools.map(t => ({
+      type: 'function',
+      function: { name: t.name, description: t.description, parameters: t.inputSchema }
+    }));
+
+    // Define Specialized Agent Tools
+    const supportTools = allTools.filter(t => t.function.name === 'create_ticket');
+    const infraTools = allTools.filter(t => t.function.name === 'check_system_status');
+
+    // =========================================================================
+    // MULTI-AGENT SYSTEM START
+    // =========================================================================
+
+    // AGENT 1: The Triage Agent (Router)
+    // Goal: Determine which specialized agent should handle this request.
+    console.log("🤖 [Agent 1: Triage] Analyzing request...");
+    const triageResponse = await groq.chat.completions.create({
+      model: 'qwen/qwen3.8-27b', // Fast, small model is perfect for routing
       messages: [
-        { role: 'system', content: "You are a helpful AI IT Support Agent. Your goal is to solve employee IT problems. If you cannot solve it immediately, use the create_ticket tool. If they ask if a system is down, use the check_system_status tool." },
+        { 
+          role: 'system', 
+          content: "You are the Triage Agent. Your only job is to route requests. If the user is asking about a server, VPN, Email, or system being down, reply with exactly the word 'INFRA'. If the user has a general issue, needs hardware, software, or password help, reply with exactly the word 'SUPPORT'. Do not say anything else." 
+        },
         { role: 'user', content: message }
       ],
-      tools: supportTools,
+      temperature: 0.1
+    });
+
+    const route = triageResponse.choices[0].message.content.trim().toUpperCase();
+    console.log(`🔀 [Router] Handoff to -> ${route} AGENT`);
+
+    // AGENT 2 & 3: The Specialized Agents
+    let selectedTools;
+    let systemPrompt;
+    let agentName;
+
+    if (route.includes('INFRA')) {
+      agentName = "Infrastructure Agent";
+      selectedTools = infraTools;
+      systemPrompt = "You are the specialized Infrastructure Agent. Your job is to check system statuses for employees. Use your tool to check if systems are operational.";
+    } else {
+      // Default to Support Agent
+      agentName = "IT Support Agent";
+      selectedTools = supportTools;
+      systemPrompt = "You are the specialized IT Support Agent. Your job is to help users with their general IT problems and create tickets for them using your tool if human intervention is needed.";
+    }
+
+    console.log(`🤖 [Agent 2: ${agentName}] Processing request...`);
+    
+    // The Specialist Agent now processes the user's message using ONLY its specific tools
+    const specialistResponse = await groq.chat.completions.create({
+      model: 'qwen/qwen3.8-27b', // Could use a larger model here for complex reasoning
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: message }
+      ],
+      tools: selectedTools.length > 0 ? selectedTools : undefined,
       tool_choice: 'auto'
     });
 
-    const responseMessage = response.choices[0].message;
+    const responseMessage = specialistResponse.choices[0].message;
 
+    // 3. Execute Tool if the Specialist decided to use one
     if (responseMessage.tool_calls && responseMessage.tool_calls.length > 0) {
       const call = responseMessage.tool_calls[0];
-      const toolResult = await handleToolCall(call, userId);
+      const name = call.function.name;
+      const args = JSON.parse(call.function.arguments);
       
-      return { text: `I took an action on your behalf: ${toolResult}` };
+      if (name === 'create_ticket') args.userId = userId;
+      
+      console.log(`🛠️ [${agentName}] Executing tool: ${name}`);
+      const toolResult = await client.callTool({ name, arguments: args });
+      
+      return { 
+        text: `[${agentName}] I took an action on your behalf: ${toolResult.content[0].text}` 
+      };
     }
 
-    return { text: responseMessage.content };
+    return { text: `[${agentName}] ${responseMessage.content}` };
 
   } catch (error) {
     console.error('AI Service Error:', error);
-    return { text: 'Sorry, I am having trouble connecting to my AI brain right now.' };
+    return { text: 'Sorry, the Agent Swarm is currently offline.' };
   }
 };
 
