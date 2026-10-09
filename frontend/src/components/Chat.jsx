@@ -26,7 +26,7 @@ const Chat = ({ token }) => {
     setIsLoading(true);
 
     try {
-      const res = await fetch(`${import.meta.env.VITE_API_URL}/chat/message`, {
+      const res = await fetch(`${import.meta.env.VITE_API_URL}/api/chat/message`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
